@@ -584,12 +584,12 @@ public abstract class WorkflowProcessInstanceImpl extends ProcessInstanceImpl
         return configureTimer(slaDueDateExpression, timerName, useTimerSLATracking());
     }
 
-    public TimerInstance configureTimer(String timerExpression, String timerName, boolean trackTimer) {
+    public long calculateDurationFromExpression(String timerExpression, String timerName) {
         // setup SLA if provided
         String timerResolvedExpression = resolveVariable(timerExpression);
         if (timerResolvedExpression == null || timerResolvedExpression.trim().isEmpty()) {
             logger.debug("Timer due date expression resolved to no value '{}'", timerResolvedExpression);
-            return null;
+            return 0;
         }
         logger.debug("Configure timer {} due date is set to {}", timerName, timerResolvedExpression);
         InternalKnowledgeRuntime kruntime = getKnowledgeRuntime();
@@ -601,10 +601,15 @@ public abstract class WorkflowProcessInstanceImpl extends ProcessInstanceImpl
         } else {
             duration = DateTimeUtils.parseDuration(timerResolvedExpression);
         }
+        return duration;
+    }
+
+    public TimerInstance configureTimer(String timerExpression, String timerName, boolean trackTimer) {
+        InternalKnowledgeRuntime kruntime = getKnowledgeRuntime();
 
         TimerInstance timerInstance = new TimerInstance();
         timerInstance.setId(-1);
-        timerInstance.setDelay(duration);
+        timerInstance.setDelay(calculateDurationFromExpression(timerExpression, timerName));
         timerInstance.setPeriod(0);
         timerInstance.setName(timerName);
 

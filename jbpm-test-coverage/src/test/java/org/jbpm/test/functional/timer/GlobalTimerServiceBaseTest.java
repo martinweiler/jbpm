@@ -545,6 +545,62 @@ public abstract class GlobalTimerServiceBaseTest extends TimerBaseTest{
             manager.disposeRuntimeEngine(runtime);
         }
     }
+
+    @Test(timeout=20000)
+    public void testBoundaryTimerSuspendResumeTask() throws Exception {
+        Properties properties= new Properties();
+        properties.setProperty("mary", "HR");
+        properties.setProperty("john", "HR");
+        UserGroupCallback userGroupCallback = new JBossUserGroupCallbackImpl(properties);
+        environment = RuntimeEnvironmentBuilder.Factory.get()
+                .newDefaultBuilder()
+                .entityManagerFactory(emf)
+                .addAsset(ResourceFactory.newClassPathResource("org/jbpm/test/functional/timer/HumanTaskWithBoundaryTimer.bpmn"), ResourceType.BPMN2)
+                .schedulerService(globalScheduler)
+                .userGroupCallback(userGroupCallback)
+                .get();
+
+        manager = getManager(environment, true);
+
+        RuntimeEngine runtime = manager.getRuntimeEngine(ProcessInstanceIdContext.get());
+        KieSession ksession = runtime.getKieSession();
+        long ksessionId = ksession.getIdentifier();
+
+        ProcessInstance processInstance;
+        Map<String, Object> params = new HashMap<String, Object>();
+        params.put("test", "john");
+        processInstance = ksession.startProcess("PROCESS_1", params);
+
+        TimerService timerService = TimerServiceRegistry.getInstance().get(manager.getIdentifier()+TimerServiceRegistry.TIMER_SERVICE_SUFFIX);
+        Collection<TimerJobInstance> timerInstances = timerService.getTimerJobInstances(ksessionId);
+        assertNotNull(timerInstances);
+        assertEquals(1, timerInstances.size());
+
+        // let john execute Task 1
+        List<TaskSummary> list = runtime.getTaskService().getTasksAssignedAsPotentialOwner("john", "en-UK");
+        TaskSummary task = list.get(0);
+        logger.info("John is executing task {}", task.getName());
+        runtime.getTaskService().start(task.getId(), "john");
+        logger.info("John is suspending task {}", task.getName());
+        runtime.getTaskService().suspend(task.getId(), "john");
+
+        timerInstances = timerService.getTimerJobInstances(ksessionId);
+        assertNotNull(timerInstances);
+        assertEquals(0, timerInstances.size());
+
+        runtime.getTaskService().resume(task.getId(), "john");
+
+        timerInstances = timerService.getTimerJobInstances(ksessionId);
+        assertNotNull(timerInstances);
+        assertEquals(1, timerInstances.size());
+
+        runtime.getTaskService().complete(task.getId(), "john", null);
+        assertNull(ksession.getProcessInstance(processInstance.getId()));
+
+        if (runtime != null) {
+            manager.disposeRuntimeEngine(runtime);
+        }
+    }
     
     @Test
     public void testHumanTaskDeadlineWithGlobalTimerService() throws Exception {

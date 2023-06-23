@@ -16,11 +16,23 @@
 
 package org.jbpm.workflow.instance.node;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
 import org.drools.core.process.instance.WorkItem;
 import org.jbpm.process.core.context.swimlane.SwimlaneContext;
+import org.jbpm.process.core.timer.DateTimeUtils;
+import org.jbpm.process.core.timer.Timer;
+import org.jbpm.process.instance.InternalProcessRuntime;
 import org.jbpm.process.instance.context.swimlane.SwimlaneContextInstance;
 import org.jbpm.process.instance.timer.TimerInstance;
+import org.jbpm.process.instance.timer.TimerManager;
+import org.jbpm.workflow.core.DroolsAction;
 import org.jbpm.workflow.core.node.HumanTaskNode;
+import org.jbpm.workflow.core.node.StateBasedNode;
 import org.jbpm.workflow.core.node.WorkItemNode;
 import org.jbpm.workflow.instance.impl.WorkflowProcessInstanceImpl;
 import org.kie.api.runtime.manager.RuntimeEngine;
@@ -147,8 +159,10 @@ public class HumanTaskNodeInstance extends WorkItemNodeInstance {
             return;
         }
         if (SUSPEND_SIGNAL.equals(type)) {
+            removeBoundaryTimer();
             createSuspendTimer((WorkItem) event);
         } else if (ACTIVATE_SIGNAL.equals(type)) {
+            restoreBoundaryTimer();
             removeSuspendTimer();
         }
     }
@@ -198,6 +212,74 @@ public class HumanTaskNodeInstance extends WorkItemNodeInstance {
         this.suspendUntilTimerId = timer.getId();
         logger.debug("suspendUntilTimerId for node instance {} with expression {}", this.getId(), suspendUntil);
 
+    }
+
+    private void removeBoundaryTimer() {
+        if(((StateBasedNode)getNode()).getTimers() != null) {
+            for(Timer timer : ((StateBasedNode)getNode()).getTimers().keySet()) {
+                WorkflowProcessInstanceImpl processInstanceImpl = (WorkflowProcessInstanceImpl)getProcessInstance();
+                logger.debug("Remove boundary timer {} for node {} in processInstance {}", timer.getId(), this.getId(), processInstanceImpl.getId());
+                getTimerManager().cancelTimer(processInstanceImpl.getId(), timer.getId());
+            }
+        }
+    }
+
+    private TimerManager getTimerManager() {
+        return ((InternalProcessRuntime) ((WorkflowProcessInstanceImpl)getProcessInstance()).getKnowledgeRuntime().getProcessRuntime()).getTimerManager();
+    }
+
+    private void restoreBoundaryTimer() {
+        if(((StateBasedNode)getNode()).getTimers() != null) {
+            for(Timer timer : ((StateBasedNode)getNode()).getTimers().keySet()) {
+                WorkflowProcessInstanceImpl processInstanceImpl = (WorkflowProcessInstanceImpl)getProcessInstance();
+
+                TimerInstance timerInstance = new TimerInstance();
+                switch (timer.getTimeType()) {
+                case Timer.TIME_CYCLE:
+                    // when using ISO date/time period is not set
+                    long[] repeatValues = DateTimeUtils.parseRepeatableDateTime(timer.getDelay());
+                    if (repeatValues.length == 3) {
+                        int parsedReapedCount = (int)repeatValues[0];
+                        if (parsedReapedCount > -1) {
+                            timerInstance.setRepeatLimit(parsedReapedCount+1);
+                        }
+                        timerInstance.setDelay(repeatValues[1]);
+                        timerInstance.setPeriod(repeatValues[2]);
+                    } else {
+                        timerInstance.setDelay(repeatValues[0]);
+                        try {
+                            timerInstance.setPeriod(DateTimeUtils.parseTimeString(timer.getPeriod()));
+                        } catch (RuntimeException e) {
+                            timerInstance.setPeriod(repeatValues[0]);
+                        }
+                    }
+
+                    break;
+                case Timer.TIME_DURATION:
+                    timerInstance.setDelay(processInstanceImpl.calculateDurationFromExpression(timer.getDelay(), timer.getName()));
+                    break;
+                case Timer.TIME_DATE:
+                    timerInstance.setDelay(DateTimeUtils.parseDateAsDuration(timer.getDate()));
+                    break;
+                }
+
+                timerInstance.setName(timer.getName());
+                timerInstance.setTimerId(timer.getId());
+
+                getTimerManager().registerTimer(timerInstance, getProcessInstance());
+
+                List<Long> timerList = getTimerInstances();
+                if(timerList == null) {
+                    timerList = new ArrayList<Long>();
+                } else {
+                    timerList.clear();
+                }
+                logger.debug("Restore boundary timer {} for node {} in processInstance {}", timerInstance.getId(), this.getId(), processInstanceImpl.getId());
+
+                timerList.add(timerInstance.getId());
+                internalSetTimerInstances(timerList);
+            }
+        }
     }
 
     public void addEventListeners() {
